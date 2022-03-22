@@ -313,7 +313,7 @@ class LogEngine(BaseEngine):
         """
         Add file output of log.
         """
-        today_date = datetime.now().strftime("%Y%m%d")
+        today_date = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"vt_{today_date}.log"
         log_path = get_folder_path("log")
         file_path = log_path.joinpath(filename)
