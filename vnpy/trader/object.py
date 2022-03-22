@@ -2,7 +2,7 @@
 Basic data structure used for general trading function in the trading platform.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from logging import INFO
 
@@ -97,6 +97,9 @@ class BarData(BaseData):
     high_price: float = 0
     low_price: float = 0
     close_price: float = 0
+    vwap: float = 0
+    twap: float = 0
+    ticks: list = field(default_factory=list)
 
     def __post_init__(self):
         """"""
