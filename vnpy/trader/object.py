@@ -99,6 +99,9 @@ class BarData(BaseData):
     high_price: float = 0
     low_price: float = 0
     close_price: float = 0
+    vwap: float = 0
+    twap: float = 0
+    ticks: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """"""
