@@ -5,8 +5,8 @@ pypi_index=$2
 shift 2
 
 
-[[ -z $python ]] && python=python
-[[ -z $pypi_index ]] && pypi_index=https://pypi.org/simple
+[[ -z $python ]] && python=python3
+[[ -z $pypi_index ]] && pypi_index=https://pypi.vnpy.com
 
 $python -m pip install --upgrade pip wheel --index $pypi_index
 
@@ -14,18 +14,18 @@ $python -m pip install --upgrade pip wheel --index $pypi_index
 function install-ta-lib()
 {   
     # install numpy first
-    $python -m pip install numpy==1.21.5 --index $pypi_index
+    $python -m pip install numpy==2.2.3 --index $pypi_index
 
     pushd /tmp
-    wget https://pip.vnpy.com/colletion/ta-lib-0.4.0-src.tar.gz
-    tar -xf ta-lib-0.4.0-src.tar.gz
-    cd ta-lib
+    wget https://pip.vnpy.com/colletion/ta-lib-0.6.4-src.tar.gz
+    tar -xf ta-lib-0.6.4-src.tar.gz
+    cd ta-lib-0.6.4
     ./configure --prefix=/usr/local
     make -j1
     make install
     popd
 
-    $python -m pip install ta-lib==0.4.24 --index $pypi_index
+    $python -m pip install ta-lib==0.6.4 --index $pypi_index
 }
 function ta-lib-exists()
 {
@@ -33,12 +33,8 @@ function ta-lib-exists()
 }
 ta-lib-exists || install-ta-lib
 
-# Install Python Modules
-$python -m pip install -r requirements.txt --index $pypi_index
-
 # Install local Chinese language environment
 locale-gen zh_CN.GB18030
 
 # Install VeighNa
 $python -m pip install . --index $pypi_index
-

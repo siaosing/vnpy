@@ -6,18 +6,16 @@ import webbrowser
 import types
 import threading
 
-import qdarkstyle
+import qdarkstyle  # type: ignore
 from PySide6 import QtGui, QtWidgets, QtCore
+from loguru import logger
 
 from ..setting import SETTINGS
 from ..utility import get_icon_path
+from ..locale import _
 
 
 Qt = QtCore.Qt
-QtCore.pyqtSignal = QtCore.Signal
-QtWidgets.QAction = QtGui.QAction
-QtCore.QDate.toPyDate = QtCore.QDate.toPython
-QtCore.QDateTime.toPyDate = QtCore.QDateTime.toPython
 
 
 def create_qapp(app_name: str = "VeighNa Trader") -> QtWidgets.QApplication:
@@ -42,30 +40,33 @@ def create_qapp(app_name: str = "VeighNa Trader") -> QtWidgets.QApplication:
             app_name
         )
 
-    # Hide help button for all dialogs
-    # qapp.setAttribute(QtCore.Qt.AA_DisableWindowContextHelpButton)
-
     # Exception Handling
     exception_widget: ExceptionWidget = ExceptionWidget()
 
-    def excepthook(exctype: type, value: Exception, tb: types.TracebackType) -> None:
+    def excepthook(
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_traceback: types.TracebackType | None
+    ) -> None:
         """Show exception detail with QMessageBox."""
-        sys.__excepthook__(exctype, value, tb)
+        logger.opt(exception=(exc_type, exc_value, exc_traceback)).critical("Main thread exception")
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
-        msg: str = "".join(traceback.format_exception(exctype, value, tb))
+        msg: str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
         exception_widget.signal.emit(msg)
 
     sys.excepthook = excepthook
 
-    if sys.version_info >= (3, 8):
-        def threading_excepthook(args: threading.ExceptHookArgs, /):
-            """Show exception detail from background threads with QMessageBox."""
+    def threading_excepthook(args: threading.ExceptHookArgs) -> None:
+        """Show exception detail from background threads with QMessageBox."""
+        if args.exc_value and args.exc_traceback:
+            logger.opt(exception=(args.exc_type, args.exc_value, args.exc_traceback)).critical("Background thread exception")
             sys.__excepthook__(args.exc_type, args.exc_value, args.exc_traceback)
 
-            msg: str = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
-            exception_widget.signal.emit(msg)
+        msg: str = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+        exception_widget.signal.emit(msg)
 
-        threading.excepthook = threading_excepthook
+    threading.excepthook = threading_excepthook
 
     return qapp
 
@@ -74,7 +75,7 @@ class ExceptionWidget(QtWidgets.QWidget):
     """"""
     signal: QtCore.Signal = QtCore.Signal(str)
 
-    def __init__(self, parent: QtWidgets.QWidget = None) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         """"""
         super().__init__(parent)
 
@@ -83,19 +84,19 @@ class ExceptionWidget(QtWidgets.QWidget):
 
     def init_ui(self) -> None:
         """"""
-        self.setWindowTitle("触发异常")
+        self.setWindowTitle(_("触发异常"))
         self.setFixedSize(600, 600)
 
         self.msg_edit: QtWidgets.QTextEdit = QtWidgets.QTextEdit()
         self.msg_edit.setReadOnly(True)
 
-        copy_button: QtWidgets.QPushButton = QtWidgets.QPushButton("复制")
+        copy_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("复制"))
         copy_button.clicked.connect(self._copy_text)
 
-        community_button: QtWidgets.QPushButton = QtWidgets.QPushButton("求助")
+        community_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("求助"))
         community_button.clicked.connect(self._open_community)
 
-        close_button: QtWidgets.QPushButton = QtWidgets.QPushButton("关闭")
+        close_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("关闭"))
         close_button.clicked.connect(self.close)
 
         hbox: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()

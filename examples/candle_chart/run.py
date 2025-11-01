@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     widget.update_history(history)
 
-    def update_bar():
+    def update_bar() -> None:
         bar = new_data.pop(0)
         widget.update_bar(bar)
 
@@ -40,4 +40,4 @@ if __name__ == "__main__":
     # timer.start(100)
 
     widget.show()
-    app.exec_()
+    app.exec()

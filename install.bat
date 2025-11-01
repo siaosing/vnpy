@@ -1,11 +1,16 @@
+@ECHO OFF
+SET python=%1
+SET pypi_index=%2
+IF     %python%""     == "" SET python=python
+IF     %pypi_index%"" == "" SET pypi_index=https://pypi.vnpy.com
+IF NOT %pypi_index%"" == "" SET pypi_index=--index-url %pypi_index%
+@ECHO ON
+
 :: Upgrade pip & wheel
-python -m pip install --upgrade pip wheel
+%python% -m pip install --upgrade pip wheel %pypi_index%
 
 ::Install prebuild wheel
-python -m pip install --extra-index-url http://139.196.190.180 --trusted-host 139.196.190.180 TA_Lib
-
-::Install Python Modules
-python -m pip install -r requirements.txt
+%python% -m pip install --extra-index-url https://pypi.vnpy.com ta_lib==0.6.4
 
 :: Install VeighNa
-python -m pip install .
+%python% -m pip install .

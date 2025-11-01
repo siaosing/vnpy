@@ -6,7 +6,8 @@ from types import ModuleType
 import webbrowser
 from functools import partial
 from importlib import import_module
-from typing import Callable, Dict, List, Tuple
+from typing import TypeVar
+from collections.abc import Callable
 
 import vnpy
 from vnpy.event import EventEngine
@@ -29,6 +30,10 @@ from .widget import (
 )
 from ..engine import MainEngine, BaseApp
 from ..utility import get_icon_path, TRADER_DIR
+from ..locale import _
+
+
+WidgetType = TypeVar("WidgetType", bound="QtWidgets.QWidget")
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -43,10 +48,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_engine: MainEngine = main_engine
         self.event_engine: EventEngine = event_engine
 
-        self.window_title: str = f"VeighNa Trader 社区版 - {vnpy.__version__}   [{TRADER_DIR}]"
+        self.window_title: str = _("VeighNa Trader 社区版 - {}   [{}]").format(vnpy.__version__, TRADER_DIR)
 
-        self.widgets: Dict[str, QtWidgets.QWidget] = {}
-        self.monitors: Dict[str, BaseMonitor] = {}
+        self.widgets: dict[str, QtWidgets.QWidget] = {}
+        self.monitors: dict[str, BaseMonitor] = {}
 
         self.init_ui()
 
@@ -61,28 +66,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def init_dock(self) -> None:
         """"""
         self.trading_widget, trading_dock = self.create_dock(
-            TradingWidget, "交易", QtCore.Qt.LeftDockWidgetArea
+            TradingWidget, _("交易"), QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
         )
         tick_widget, tick_dock = self.create_dock(
-            TickMonitor, "行情", QtCore.Qt.RightDockWidgetArea
+            TickMonitor, _("行情"), QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         )
         order_widget, order_dock = self.create_dock(
-            OrderMonitor, "委托", QtCore.Qt.RightDockWidgetArea
+            OrderMonitor, _("委托"), QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         )
         active_widget, active_dock = self.create_dock(
-            ActiveOrderMonitor, "活动", QtCore.Qt.RightDockWidgetArea
+            ActiveOrderMonitor, _("活动"), QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         )
         trade_widget, trade_dock = self.create_dock(
-            TradeMonitor, "成交", QtCore.Qt.RightDockWidgetArea
+            TradeMonitor, _("成交"), QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         )
         log_widget, log_dock = self.create_dock(
-            LogMonitor, "日志", QtCore.Qt.BottomDockWidgetArea
+            LogMonitor, _("日志"), QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
         )
         account_widget, account_dock = self.create_dock(
-            AccountMonitor, "资金", QtCore.Qt.BottomDockWidgetArea
+            AccountMonitor, _("资金"), QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
         )
         position_widget, position_dock = self.create_dock(
-            PositionMonitor, "持仓", QtCore.Qt.BottomDockWidgetArea
+            PositionMonitor, _("持仓"), QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
         )
 
         self.tabifyDockWidget(active_dock, order_dock)
@@ -98,14 +103,14 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.setNativeMenuBar(False)     # for mac and linux
 
         # System menu
-        sys_menu: QtWidgets.QMenu = bar.addMenu("系统")
+        sys_menu: QtWidgets.QMenu = bar.addMenu(_("系统"))
 
         gateway_names: list = self.main_engine.get_all_gateway_names()
         for name in gateway_names:
-            func: Callable = partial(self.connect, name)
+            func: Callable = partial(self.connect_gateway, name)
             self.add_action(
                 sys_menu,
-                f"连接{name}",
+                _("连接{}").format(name),
                 get_icon_path(__file__, "connect.ico"),
                 func
             )
@@ -114,34 +119,34 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.add_action(
             sys_menu,
-            "退出",
+            _("退出"),
             get_icon_path(__file__, "exit.ico"),
             self.close
         )
 
         # App menu
-        app_menu: QtWidgets.QMenu = bar.addMenu("功能")
+        app_menu: QtWidgets.QMenu = bar.addMenu(_("功能"))
 
-        all_apps: List[BaseApp] = self.main_engine.get_all_apps()
+        all_apps: list[BaseApp] = self.main_engine.get_all_apps()
         for app in all_apps:
             ui_module: ModuleType = import_module(app.app_module + ".ui")
-            widget_class: QtWidgets.QWidget = getattr(ui_module, app.widget_name)
+            widget_class: type[QtWidgets.QWidget] = getattr(ui_module, app.widget_name)
 
-            func: Callable = partial(self.open_widget, widget_class, app.app_name)
+            func = partial(self.open_widget, widget_class, app.app_name)
 
             self.add_action(app_menu, app.display_name, app.icon_name, func, True)
 
         # Global setting editor
-        action: QtGui.QAction = QtWidgets.QAction("配置", self)
+        action: QtGui.QAction = QtGui.QAction(_("配置"), self)
         action.triggered.connect(self.edit_global_setting)
         bar.addAction(action)
 
         # Help menu
-        help_menu: QtWidgets.QMenu = bar.addMenu("帮助")
+        help_menu: QtWidgets.QMenu = bar.addMenu(_("帮助"))
 
         self.add_action(
             help_menu,
-            "查询合约",
+            _("查询合约"),
             get_icon_path(__file__, "contract.ico"),
             partial(self.open_widget, ContractManager, "contract"),
             True
@@ -149,21 +154,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.add_action(
             help_menu,
-            "还原窗口",
+            _("还原窗口"),
             get_icon_path(__file__, "restore.ico"),
             self.restore_window_setting
         )
 
         self.add_action(
             help_menu,
-            "测试邮件",
+            _("测试邮件"),
             get_icon_path(__file__, "email.ico"),
             self.send_test_email
         )
 
         self.add_action(
             help_menu,
-            "社区论坛",
+            _("社区论坛"),
             get_icon_path(__file__, "forum.ico"),
             self.open_forum,
             True
@@ -171,7 +176,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.add_action(
             help_menu,
-            "关于",
+            _("关于"),
             get_icon_path(__file__, "about.ico"),
             partial(self.open_widget, AboutDialog, "about"),
         )
@@ -179,7 +184,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def init_toolbar(self) -> None:
         """"""
         self.toolbar: QtWidgets.QToolBar = QtWidgets.QToolBar(self)
-        self.toolbar.setObjectName("工具栏")
+        self.toolbar.setObjectName(_("工具栏"))
         self.toolbar.setFloatable(False)
         self.toolbar.setMovable(False)
 
@@ -189,9 +194,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.setIconSize(size)
 
         # Set button spacing
-        self.toolbar.layout().setSpacing(10)
+        layout: QtWidgets.QLayout | None = self.toolbar.layout()
+        if layout:
+            layout.setSpacing(10)
 
-        self.addToolBar(QtCore.Qt.LeftToolBarArea, self.toolbar)
+        self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, self.toolbar)
 
     def add_action(
         self,
@@ -204,7 +211,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """"""
         icon: QtGui.QIcon = QtGui.QIcon(icon_name)
 
-        action: QtGui.QAction = QtWidgets.QAction(action_name, self)
+        action: QtGui.QAction = QtGui.QAction(action_name, self)
         action.triggered.connect(func)
         action.setIcon(icon)
 
@@ -215,30 +222,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def create_dock(
         self,
-        widget_class: QtWidgets.QWidget,
+        widget_class: type[WidgetType],
         name: str,
-        area: int
-    ) -> Tuple[QtWidgets.QWidget, QtWidgets.QDockWidget]:
+        area: QtCore.Qt.DockWidgetArea
+    ) -> tuple[WidgetType, QtWidgets.QDockWidget]:
         """
         Initialize a dock widget.
         """
-        widget: QtWidgets.QWidget = widget_class(self.main_engine, self.event_engine)
+        widget: WidgetType = widget_class(self.main_engine, self.event_engine)      # type: ignore
         if isinstance(widget, BaseMonitor):
             self.monitors[name] = widget
 
         dock: QtWidgets.QDockWidget = QtWidgets.QDockWidget(name)
         dock.setWidget(widget)
         dock.setObjectName(name)
-        dock.setFeatures(dock.DockWidgetFloatable | dock.DockWidgetMovable)
+        dock.setFeatures(dock.DockWidgetFeature.DockWidgetFloatable | dock.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(area, dock)
         return widget, dock
 
-    def connect(self, gateway_name: str) -> None:
+    def connect_gateway(self, gateway_name: str) -> None:
         """
         Open connect dialog for gateway connection.
         """
         dialog: ConnectDialog = ConnectDialog(self.main_engine, gateway_name)
-        dialog.exec_()
+        dialog.exec()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """
@@ -246,13 +253,13 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         reply = QtWidgets.QMessageBox.question(
             self,
-            "退出",
-            "确认退出？",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            _("退出"),
+            _("确认退出？"),
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
         )
 
-        if reply == QtWidgets.QMessageBox.Yes:
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             for widget in self.widgets.values():
                 widget.close()
 
@@ -267,17 +274,17 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             event.ignore()
 
-    def open_widget(self, widget_class: QtWidgets.QWidget, name: str) -> None:
+    def open_widget(self, widget_class: type[QtWidgets.QWidget], name: str) -> None:
         """
         Open contract manager.
         """
-        widget: QtWidgets.QWidget = self.widgets.get(name, None)
+        widget: QtWidgets.QWidget | None = self.widgets.get(name, None)
         if not widget:
-            widget = widget_class(self.main_engine, self.event_engine)
+            widget = widget_class(self.main_engine, self.event_engine)      # type: ignore
             self.widgets[name] = widget
 
         if isinstance(widget, QtWidgets.QDialog):
-            widget.exec_()
+            widget.exec()
         else:
             widget.show()
 
@@ -312,7 +319,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Sending a test email.
         """
-        self.main_engine.send_email("VeighNa Trader", "testing")
+        self.main_engine.send_email("VeighNa Trader", "testing", None)
 
     def open_forum(self) -> None:
         """
@@ -323,4 +330,4 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         """
         dialog: GlobalDialog = GlobalDialog()
-        dialog.exec_()
+        dialog.exec()

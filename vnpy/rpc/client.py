@@ -1,5 +1,5 @@
 import threading
-from datetime import datetime
+from time import time
 from functools import lru_cache
 from typing import Any
 
@@ -17,13 +17,13 @@ class RemoteException(Exception):
         """
         Constructor
         """
-        self._value = value
+        self._value: Any = value
 
     def __str__(self) -> str:
         """
         Output error message
         """
-        return self._value
+        return str(self._value)
 
 
 class RpcClient:
@@ -47,24 +47,20 @@ class RpcClient:
 
         # Worker thread relate, used to process data pushed from server
         self._active: bool = False                 # RpcClient status
-        self._thread: threading.Thread = None      # RpcClient thread
+        self._thread: threading.Thread | None = None      # RpcClient thread
         self._lock: threading.Lock = threading.Lock()
 
-        self._last_received_ping: datetime = datetime.utcnow()
+        self._last_received_ping: float = time()
 
-    @lru_cache(100)
+    @lru_cache(100)  # noqa
     def __getattr__(self, name: str) -> Any:
         """
         Realize remote call function
         """
-
         # Perform remote call task
-        def dorpc(*args, **kwargs):
+        def dorpc(*args: Any, **kwargs: Any) -> Any:
             # Get timeout value from kwargs, default value is 30 seconds
-            if "timeout" in kwargs:
-                timeout = kwargs.pop("timeout")
-            else:
-                timeout = 30000
+            timeout: int = kwargs.pop("timeout", 30000)
 
             # Generate request
             req: list = [name, args, kwargs]
@@ -111,7 +107,7 @@ class RpcClient:
         self._thread = threading.Thread(target=self.run)
         self._thread.start()
 
-        self._last_received_ping = datetime.utcnow()
+        self._last_received_ping = time()
 
     def stop(self) -> None:
         """
@@ -165,7 +161,7 @@ class RpcClient:
         """
         self._socket_sub.setsockopt_string(zmq.SUBSCRIBE, topic)
 
-    def on_disconnected(self):
+    def on_disconnected(self) -> None:
         """
         Callback when heartbeat is lost.
         """

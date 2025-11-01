@@ -3,24 +3,21 @@ General utility functions.
 """
 
 import json
-import logging
 import sys
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
-from typing import Callable, Dict, Tuple, Union, Optional
+from collections.abc import Callable
 from decimal import Decimal
 from math import floor, ceil
 
 import numpy as np
 import talib
+from zoneinfo import ZoneInfo, available_timezones      # noqa
 
 from .object import BarData, TickData
 from .constant import Exchange, Interval
+from .locale import _
 
-if sys.version_info >= (3, 9):
-    from zoneinfo import ZoneInfo, available_timezones              # noqa
-else:
-    from backports.zoneinfo import ZoneInfo, available_timezones    # noqa
 
 log_formatter = logging.Formatter('[%(asctime)s] %(message)s')
 # add instrument_night_xxxx
@@ -33,11 +30,11 @@ instrument_night_0100 = ['CU', 'AL', 'ZN', 'PB', 'NI', 'SN', 'SS']
 instrument_night_0230 = ['AU', 'AG', 'SC']
 instrument_cffex = ['IF', 'IC', 'IH', 'T', 'TF']
 
-def extract_vt_symbol(vt_symbol: str) -> Tuple[str, Exchange]:
+def extract_vt_symbol(vt_symbol: str) -> tuple[str, Exchange]:
     """
     :return: (symbol, exchange)
     """
-    symbol, exchange_str = vt_symbol.split(".")
+    symbol, exchange_str = vt_symbol.rsplit(".", 1)
     return symbol, Exchange(exchange_str)
 
 
@@ -48,7 +45,7 @@ def generate_vt_symbol(symbol: str, exchange: Exchange) -> str:
     return f"{symbol}.{exchange.value}"
 
 
-def _get_trader_dir(temp_name: str) -> Tuple[Path, Path]:
+def _get_trader_dir(temp_name: str) -> tuple[Path, Path]:
     """
     Get path where trader is running in.
     """
@@ -62,7 +59,7 @@ def _get_trader_dir(temp_name: str) -> Tuple[Path, Path]:
 
     # Otherwise use home path of system.
     home_path: Path = Path.home()
-    temp_path: Path = home_path.joinpath(temp_name)
+    temp_path = home_path.joinpath(temp_name)
 
     # Create .vntrader folder under home path if not exist.
     if not temp_path.exists():
@@ -108,7 +105,7 @@ def load_json(filename: str) -> dict:
     filepath: Path = get_file_path(filename)
 
     if filepath.exists():
-        with open(filepath, mode="r", encoding="UTF-8") as f:
+        with open(filepath, encoding="UTF-8") as f:
             data: dict = json.load(f)
         return data
     else:
@@ -134,9 +131,9 @@ def round_to(value: float, target: float) -> float:
     """
     Round price to price tick value.
     """
-    value: Decimal = Decimal(str(value))
-    target: Decimal = Decimal(str(target))
-    rounded: float = float(int(round(value / target)) * target)
+    decimal_value: Decimal = Decimal(str(value))
+    decimal_target: Decimal = Decimal(str(target))
+    rounded: float = float(int(round(decimal_value / decimal_target)) * decimal_target)
     return rounded
 
 
@@ -144,9 +141,9 @@ def floor_to(value: float, target: float) -> float:
     """
     Similar to math.floor function, but to target float number.
     """
-    value: Decimal = Decimal(str(value))
-    target: Decimal = Decimal(str(target))
-    result: float = float(int(floor(value / target)) * target)
+    decimal_value: Decimal = Decimal(str(value))
+    decimal_target: Decimal = Decimal(str(target))
+    result: float = float(int(floor(decimal_value / decimal_target)) * decimal_target)
     return result
 
 
@@ -154,9 +151,9 @@ def ceil_to(value: float, target: float) -> float:
     """
     Similar to math.ceil function, but to target float number.
     """
-    value: Decimal = Decimal(str(value))
-    target: Decimal = Decimal(str(target))
-    result: float = float(int(ceil(value / target)) * target)
+    decimal_value: Decimal = Decimal(str(value))
+    decimal_target: Decimal = Decimal(str(target))
+    result: float = float(int(ceil(decimal_value / decimal_target)) * decimal_target)
     return result
 
 
@@ -190,23 +187,29 @@ class BarGenerator:
         self,
         on_bar: Callable,
         window: int = 0,
-        on_window_bar: Callable = None,
-        interval: Interval = Interval.MINUTE
+        on_window_bar: Callable | None = None,
+        interval: Interval = Interval.MINUTE,
+        daily_end: time | None = None
     ) -> None:
         """Constructor"""
-        self.bar: BarData = None
+        self.bar: BarData | None = None
         self.on_bar: Callable = on_bar
 
         self.interval: Interval = interval
         self.interval_count: int = 0
 
-        self.hour_bar: BarData = None
+        self.hour_bar: BarData | None = None
+        self.daily_bar: BarData | None = None
 
         self.window: int = window
-        self.window_bar: BarData = None
-        self.on_window_bar: Callable = on_window_bar
+        self.window_bar: BarData | None = None
+        self.on_window_bar: Callable | None = on_window_bar
 
-        self.last_tick: TickData = None
+        self.last_tick: TickData | None = None
+
+        self.daily_end: time | None = daily_end
+        if self.interval == Interval.DAILY and not self.daily_end:
+            raise RuntimeError(_("合成日K线必须传入每日收盘时间"))
 
     def update_tick(self, tick: TickData) -> None:
         """
@@ -216,10 +219,6 @@ class BarGenerator:
 
         # Filter tick data with 0 last price
         if not tick.last_price:
-            return
-
-        # Filter tick data with older timestamp
-        if self.last_tick and tick.datetime < self.last_tick.datetime:
             return
 
         if not self.bar:
@@ -248,20 +247,20 @@ class BarGenerator:
                 close_price=tick.last_price,
                 open_interest=tick.open_interest
             )
-        else:
+        elif self.bar:
             self.bar.high_price = max(self.bar.high_price, tick.last_price)
-            if tick.high_price > self.last_tick.high_price:
+            if self.last_tick and tick.high_price > self.last_tick.high_price:
                 self.bar.high_price = max(self.bar.high_price, tick.high_price)
 
             self.bar.low_price = min(self.bar.low_price, tick.last_price)
-            if tick.low_price < self.last_tick.low_price:
+            if self.last_tick and tick.low_price < self.last_tick.low_price:
                 self.bar.low_price = min(self.bar.low_price, tick.low_price)
 
             self.bar.close_price = tick.last_price
             self.bar.open_interest = tick.open_interest
             self.bar.datetime = tick.datetime
 
-        if self.last_tick:
+        if self.last_tick and self.bar:
             volume_change: float = tick.volume - self.last_tick.volume
             self.bar.volume += max(volume_change, 0)
 
@@ -276,8 +275,10 @@ class BarGenerator:
         """
         if self.interval == Interval.MINUTE:
             self.update_bar_minute_window(bar)
-        else:
+        elif self.interval == Interval.HOUR:
             self.update_bar_hour_window(bar)
+        else:
+            self.update_bar_daily_window(bar)
 
     def update_bar_minute_window(self, bar: BarData) -> None:
         """"""
@@ -312,7 +313,9 @@ class BarGenerator:
 
         # Check if window bar completed
         if not (bar.datetime.minute + 1) % self.window:
-            self.on_window_bar(self.window_bar)
+            if self.on_window_bar:
+                self.on_window_bar(self.window_bar)
+
             self.window_bar = None
 
     def update_bar_hour_window(self, bar: BarData) -> None:
@@ -335,7 +338,7 @@ class BarGenerator:
             )
             return
 
-        finished_bar: BarData = None
+        finished_bar: BarData | None = None
 
         # If minute is 59, update minute bar into window bar and push
         if bar.datetime.minute == 59:
@@ -360,7 +363,7 @@ class BarGenerator:
         elif bar.datetime.hour != self.hour_bar.datetime.hour:
             finished_bar = self.hour_bar
 
-            dt: datetime = bar.datetime.replace(minute=0, second=0, microsecond=0)
+            dt = bar.datetime.replace(minute=0, second=0, microsecond=0)
             self.hour_bar = BarData(
                 symbol=bar.symbol,
                 exchange=bar.exchange,
@@ -397,7 +400,8 @@ class BarGenerator:
     def on_hour_bar(self, bar: BarData) -> None:
         """"""
         if self.window == 1:
-            self.on_window_bar(bar)
+            if self.on_window_bar:
+                self.on_window_bar(bar)
         else:
             if not self.window_bar:
                 self.window_bar = BarData(
@@ -427,17 +431,433 @@ class BarGenerator:
             self.interval_count += 1
             if not self.interval_count % self.window:
                 self.interval_count = 0
-                self.on_window_bar(self.window_bar)
+
+                if self.on_window_bar:
+                    self.on_window_bar(self.window_bar)
+
                 self.window_bar = None
 
-    def generate(self) -> Optional[BarData]:
+    def update_bar_daily_window(self, bar: BarData) -> None:
+        """"""
+        # If not inited, create daily bar object
+        if not self.daily_bar:
+            self.daily_bar = BarData(
+                symbol=bar.symbol,
+                exchange=bar.exchange,
+                datetime=bar.datetime,
+                gateway_name=bar.gateway_name,
+                open_price=bar.open_price,
+                high_price=bar.high_price,
+                low_price=bar.low_price
+            )
+        # Otherwise, update high/low price into daily bar
+        else:
+            self.daily_bar.high_price = max(
+                self.daily_bar.high_price,
+                bar.high_price
+            )
+            self.daily_bar.low_price = min(
+                self.daily_bar.low_price,
+                bar.low_price
+            )
+
+        # Update close price/volume/turnover into daily bar
+        self.daily_bar.close_price = bar.close_price
+        self.daily_bar.volume += bar.volume
+        self.daily_bar.turnover += bar.turnover
+        self.daily_bar.open_interest = bar.open_interest
+
+        # Check if daily bar completed
+        if bar.datetime.time() == self.daily_end:
+            self.daily_bar.datetime = bar.datetime.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0
+            )
+
+            if self.on_window_bar:
+                self.on_window_bar(self.daily_bar)
+
+            self.daily_bar = None
+
+    def generate(self) -> BarData | None:
         """
         Generate the bar data and call callback immediately.
         """
-        bar: BarData = self.bar
+        bar: BarData | None = self.bar
+
+        if bar:
+            bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+            self.on_bar(bar)
+
+        self.bar = None
+        return bar
+
+class NewBarGenerator:   # add NewBarGenerator
+    """
+    For:
+    1. generating 1 minute bar data from tick data
+    2. generating x minute bar/x hour bar data from 1 minute data
+
+    Notice:
+    1. for x minute bar, x must be able to divide 60: 2, 3, 5, 6, 10, 15, 20, 30
+    2. for x hour bar, x can be any number
+    """
+
+    def __init__(
+        self,
+        on_bar: Callable,
+        window: int = 0,
+        on_window_bar: Callable = None,
+        interval: Interval = Interval.MINUTE
+    ):
+        """Constructor"""
+        self.bar: BarData | None = None
+        self.on_bar: Callable = on_bar
+
+        self.interval: Interval = interval
+        self.interval_count: int = 0
+
+        self.hour_bar: BarData | None = None
+        self.daily_bar: BarData | None = None
+
+        self.window: int = window
+        self.window_bar: BarData | None = None
+        self.on_window_bar: Callable | None = on_window_bar
+
+        self.last_tick: TickData | None = None
+
+        self.daily_end: time | None = daily_end
+        if self.interval == Interval.DAILY and not self.daily_end:
+            raise RuntimeError(_("合成日K线必须传入每日收盘时间"))
+
+    def update_tick(self, tick: TickData) -> None:
+        """
+        Update new tick data into generator.
+        """
+        new_minute = False
+
+        # Filter tick data with 0 last price
+        if not tick.last_price:
+            return
+
+        if not self.bar:
+            new_minute = True
+        elif (
+            (self.bar.datetime.minute != tick.datetime.minute)
+            or (self.bar.datetime.hour != tick.datetime.hour)
+        ):
+            session_ending = False
+            if tick.datetime.strftime('%H:%M:%S') in ['23:00:00', '01:00:00', '02:30:00', '10:15:00', '11:30:00']:
+                session_ending = self.check_session_ending(tick)
+            if not session_ending:
+                self.bar.datetime = self.bar.datetime.replace(
+                    second=0, microsecond=0
+                ) + timedelta(minutes=1)  # 向后归结 和rq一致
+                self.on_bar(self.bar)
+
+                new_minute = True
+
+        if new_minute and not self.last_tick:  # first tick defer to the next minute bar
+            self.bar = BarData(
+                symbol=tick.symbol,
+                exchange=tick.exchange,
+                interval=Interval.MINUTE,
+                datetime=tick.datetime + timedelta(minutes=1),
+                gateway_name=tick.gateway_name,
+                open_price=tick.last_price,
+                high_price=tick.last_price,
+                low_price=tick.last_price,
+                close_price=tick.last_price,
+                twap=tick.last_price,
+                ticks=[tick.last_price],
+                open_interest=tick.open_interest
+            )
+        elif new_minute and self.last_tick:
+            self.bar = BarData(
+                symbol=tick.symbol,
+                exchange=tick.exchange,
+                interval=Interval.MINUTE,
+                datetime=tick.datetime,
+                gateway_name=tick.gateway_name,
+                open_price=tick.last_price,
+                high_price=tick.last_price,
+                low_price=tick.last_price,
+                close_price=tick.last_price,
+                twap=tick.last_price,
+                ticks=[tick.last_price],
+                open_interest=tick.open_interest
+            )
+        elif self.bar:
+            self.bar.high_price = max(self.bar.high_price, tick.last_price)
+            if self.last_tick and tick.high_price > self.last_tick.high_price:
+                self.bar.high_price = max(self.bar.high_price, tick.high_price)
+
+            self.bar.low_price = min(self.bar.low_price, tick.last_price)
+            if self.last_tick and tick.low_price < self.last_tick.low_price:
+                self.bar.low_price = min(self.bar.low_price, tick.low_price)
+
+            self.bar.close_price = tick.last_price
+            self.bar.open_interest = tick.open_interest
+            self.bar.ticks.append(tick.last_price)
+            self.bar.twap = sum(self.bar.ticks) / len(self.bar.ticks)
+            if not self.check_session_ending:
+                self.bar.datetime = tick.datetime
+
+        if self.last_tick:
+            volume_change = tick.volume - self.last_tick.volume
+            self.bar.volume += max(volume_change, 0)
+
+            turnover_change = tick.turnover - self.last_tick.turnover
+            self.bar.turnover += max(turnover_change, 0)
+        else:
+            self.bar.volume = tick.volume
+            self.bar.turnover = tick.turnover
+        if self.bar.volume:
+            self.bar.vwap = self.bar.turnover / self.bar.volume
+
+        self.last_tick = tick
+
+    def check_session_ending(self, tick: TickData) -> None:
+        if tick.datetime.strftime('%H:%M') == '11:30':
+            return True
+        if tick.datetime.strftime('%H:%M') == '02:30':
+            return True
+        if re.sub('\d+', '', tick.symbol.upper()) in instrument_night_2300 and tick.datetime.strftime('%H:%M') == '23:00':
+            return True
+        if re.sub('\d+', '', tick.symbol.upper()) in instrument_night_0100 and tick.datetime.strftime('%H:%M') == '01:00':
+            return True
+        if re.sub('\d+', '', tick.symbol.upper()) not in instrument_cffex and tick.datetime.strftime('%H:%M') == '10:15':
+            return True
+
+        else:
+            return False
+
+    def update_bar(self, bar: BarData) -> None:
+        """
+        Update 1 minute bar into generator
+        """
+        if self.interval == Interval.MINUTE:
+            self.update_bar_minute_window(bar)
+        elif self.interval == Interval.HOUR:
+            self.update_bar_hour_window(bar)
+        else:
+            self.update_bar_daily_window(bar)
+
+    def update_bar_minute_window(self, bar: BarData) -> None:
+        """"""
+        dt = bar.datetime.replace(second=0, microsecond=0)
+        # If not inited, create window bar object
+        if not self.window_bar:
+            dt = bar.datetime.replace(second=0, microsecond=0)
+            self.window_bar = BarData(
+                symbol=bar.symbol,
+                exchange=bar.exchange,
+                datetime=dt,
+                gateway_name=bar.gateway_name,
+                open_price=bar.open_price,
+                high_price=bar.high_price,
+                low_price=bar.low_price
+            )
+        # Otherwise, update high/low price into window bar
+        else:
+            self.window_bar.high_price = max(
+                self.window_bar.high_price,
+                bar.high_price
+            )
+            self.window_bar.low_price = min(
+                self.window_bar.low_price,
+                bar.low_price
+            )
+
+        # Update close price/volume/turnover into window bar
+        self.window_bar.ticks.extend(bar.ticks)
+        self.window_bar.close_price = bar.close_price
+        self.window_bar.twap = sum(self.window_bar.ticks) / len(self.window_bar.ticks)
+        self.window_bar.volume += bar.volume
+        self.window_bar.turnover += bar.turnover
+        self.window_bar.open_interest = bar.open_interest
+        self.window_bar.datetime = dt
+        if self.window_bar.volume:
+            self.window_bar.vwap = self.window_bar.turnover / self.window_bar.volume
+
+        # Check if window bar completed
+        if not (bar.datetime.minute) % self.window:
+            self.on_window_bar(self.window_bar)
+            self.window_bar = None
+
+    def update_bar_hour_window(self, bar: BarData) -> None:
+        """"""
+        # If not inited, create window bar object
+        if not self.hour_bar:
+            dt = bar.datetime.replace(minute=0, second=0, microsecond=0)
+            self.hour_bar = BarData(
+                symbol=bar.symbol,
+                exchange=bar.exchange,
+                datetime=dt,
+                gateway_name=bar.gateway_name,
+                open_price=bar.open_price,
+                high_price=bar.high_price,
+                low_price=bar.low_price,
+                close_price=bar.close_price,
+                volume=bar.volume,
+                turnover=bar.turnover,
+                open_interest=bar.open_interest
+            )
+            return
+
+        finished_bar = None
+
+        # If minute is 59, update minute bar into window bar and push
+        if bar.datetime.minute == 59:
+            self.hour_bar.high_price = max(
+                self.hour_bar.high_price,
+                bar.high_price
+            )
+            self.hour_bar.low_price = min(
+                self.hour_bar.low_price,
+                bar.low_price
+            )
+
+            self.hour_bar.close_price = bar.close_price
+            self.hour_bar.volume += bar.volume
+            self.hour_bar.turnover += bar.turnover
+            self.hour_bar.open_interest = bar.open_interest
+
+            finished_bar = self.hour_bar
+            self.hour_bar = None
+
+        # If minute bar of new hour, then push existing window bar
+        elif bar.datetime.hour != self.hour_bar.datetime.hour:
+            finished_bar = self.hour_bar
+
+            dt = bar.datetime.replace(minute=0, second=0, microsecond=0)
+            self.hour_bar = BarData(
+                symbol=bar.symbol,
+                exchange=bar.exchange,
+                datetime=dt,
+                gateway_name=bar.gateway_name,
+                open_price=bar.open_price,
+                high_price=bar.high_price,
+                low_price=bar.low_price,
+                close_price=bar.close_price,
+                volume=bar.volume,
+                turnover=bar.turnover,
+                open_interest=bar.open_interest
+            )
+        # Otherwise only update minute bar
+        else:
+            self.hour_bar.high_price = max(
+                self.hour_bar.high_price,
+                bar.high_price
+            )
+            self.hour_bar.low_price = min(
+                self.hour_bar.low_price,
+                bar.low_price
+            )
+
+            self.hour_bar.close_price = bar.close_price
+            self.hour_bar.volume += bar.volume
+            self.hour_bar.turnover += bar.turnover
+            self.hour_bar.open_interest = bar.open_interest
+
+        # Push finished window bar
+        if finished_bar:
+            self.on_hour_bar(finished_bar)
+
+    def on_hour_bar(self, bar: BarData) -> None:
+        """"""
+        if self.window == 1:
+            if self.on_window_bar:
+                self.on_window_bar(bar)
+        else:
+            if not self.window_bar:
+                self.window_bar = BarData(
+                    symbol=bar.symbol,
+                    exchange=bar.exchange,
+                    datetime=bar.datetime,
+                    gateway_name=bar.gateway_name,
+                    open_price=bar.open_price,
+                    high_price=bar.high_price,
+                    low_price=bar.low_price
+                )
+            else:
+                self.window_bar.high_price = max(
+                    self.window_bar.high_price,
+                    bar.high_price
+                )
+                self.window_bar.low_price = min(
+                    self.window_bar.low_price,
+                    bar.low_price
+                )
+
+            self.window_bar.close_price = bar.close_price
+            self.window_bar.volume += bar.volume
+            self.window_bar.turnover += bar.turnover
+            self.window_bar.open_interest = bar.open_interest
+
+            self.interval_count += 1
+            if not self.interval_count % self.window:
+                self.interval_count = 0
+
+                if self.on_window_bar:
+                    self.on_window_bar(self.window_bar)
+
+                self.window_bar = None
+
+    def update_bar_daily_window(self, bar: BarData) -> None:
+        """"""
+        # If not inited, create daily bar object
+        if not self.daily_bar:
+            self.daily_bar = BarData(
+                symbol=bar.symbol,
+                exchange=bar.exchange,
+                datetime=bar.datetime,
+                gateway_name=bar.gateway_name,
+                open_price=bar.open_price,
+                high_price=bar.high_price,
+                low_price=bar.low_price
+            )
+        # Otherwise, update high/low price into daily bar
+        else:
+            self.daily_bar.high_price = max(
+                self.daily_bar.high_price,
+                bar.high_price
+            )
+            self.daily_bar.low_price = min(
+                self.daily_bar.low_price,
+                bar.low_price
+            )
+
+        # Update close price/volume/turnover into daily bar
+        self.daily_bar.close_price = bar.close_price
+        self.daily_bar.volume += bar.volume
+        self.daily_bar.turnover += bar.turnover
+        self.daily_bar.open_interest = bar.open_interest
+
+        # Check if daily bar completed
+        if bar.datetime.time() == self.daily_end:
+            self.daily_bar.datetime = bar.datetime.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0
+            )
+
+            if self.on_window_bar:
+                self.on_window_bar(self.daily_bar)
+
+            self.daily_bar = None
+
+    def generate(self) -> BarData | None:
+        """
+        Generate the bar data and call callback immediately.
+        """
+        bar = self.bar
 
         if self.bar:
-            bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+            bar.datetime = bar.datetime.replace(second=0, microsecond=0) + timedelta(minutes=1)  # 向后归结 和rq一致
             self.on_bar(bar)
 
         self.bar = None
@@ -763,7 +1183,8 @@ class NewBarGenerator:   # add NewBarGenerator
 
 
 
-class ArrayManager(object):
+
+class ArrayManager:
     """
     For:
     1. time series container of bar data
@@ -857,41 +1278,49 @@ class ArrayManager(object):
         """
         return self.open_interest_array
 
-    def sma(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+    def sma(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Simple moving average.
         """
-        result: np.ndarray = talib.SMA(self.close, n)
+        result_array: np.ndarray = talib.SMA(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def ema(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def ema(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Exponential moving average.
         """
-        result: np.ndarray = talib.EMA(self.close, n)
+        result_array: np.ndarray = talib.EMA(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def kama(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def kama(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         KAMA.
         """
-        result: np.ndarray = talib.KAMA(self.close, n)
+        result_array: np.ndarray = talib.KAMA(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def wma(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def wma(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         WMA.
         """
-        result: np.ndarray = talib.WMA(self.close, n)
+        result_array: np.ndarray = talib.WMA(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def apo(
         self,
@@ -899,32 +1328,38 @@ class ArrayManager(object):
         slow_period: int,
         matype: int = 0,
         array: bool = False
-    ) -> Union[float, np.ndarray]:
+    ) -> float | np.ndarray:
         """
         APO.
         """
-        result: np.ndarray = talib.APO(self.close, fast_period, slow_period, matype)
+        result_array: np.ndarray = talib.APO(self.close, fast_period, slow_period, matype)      # type: ignore
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def cmo(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def cmo(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         CMO.
         """
-        result: np.ndarray = talib.CMO(self.close, n)
+        result_array: np.ndarray = talib.CMO(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def mom(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def mom(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         MOM.
         """
-        result: np.ndarray = talib.MOM(self.close, n)
+        result_array: np.ndarray = talib.MOM(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def ppo(
         self,
@@ -932,113 +1367,137 @@ class ArrayManager(object):
         slow_period: int,
         matype: int = 0,
         array: bool = False
-    ) -> Union[float, np.ndarray]:
+    ) -> float | np.ndarray:
         """
         PPO.
         """
-        result: np.ndarray = talib.PPO(self.close, fast_period, slow_period, matype)
+        result_array: np.ndarray = talib.PPO(self.close, fast_period, slow_period, matype)      # type: ignore
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def roc(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def roc(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         ROC.
         """
-        result: np.ndarray = talib.ROC(self.close, n)
+        result_array: np.ndarray = talib.ROC(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def rocr(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def rocr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         ROCR.
         """
-        result: np.ndarray = talib.ROCR(self.close, n)
+        result_array: np.ndarray = talib.ROCR(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def rocp(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def rocp(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         ROCP.
         """
-        result: np.ndarray = talib.ROCP(self.close, n)
+        result_array: np.ndarray = talib.ROCP(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def rocr_100(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def rocr_100(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         ROCR100.
         """
-        result: np.ndarray = talib.ROCR100(self.close, n)
+        result_array: np.ndarray = talib.ROCR100(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def trix(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def trix(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         TRIX.
         """
-        result: np.ndarray = talib.TRIX(self.close, n)
+        result_array: np.ndarray = talib.TRIX(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def std(self, n: int, nbdev: int = 1, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def std(self, n: int, nbdev: int = 1, array: bool = False) -> float | np.ndarray:
         """
         Standard deviation.
         """
-        result: np.ndarray = talib.STDDEV(self.close, n, nbdev)
+        result_array: np.ndarray = talib.STDDEV(self.close, n, nbdev)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def obv(self, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def obv(self, array: bool = False) -> float | np.ndarray:
         """
         OBV.
         """
-        result: np.ndarray = talib.OBV(self.close, self.volume)
+        result_array: np.ndarray = talib.OBV(self.close, self.volume)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def cci(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def cci(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Commodity Channel Index (CCI).
         """
-        result: np.ndarray = talib.CCI(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.CCI(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def atr(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def atr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Average True Range (ATR).
         """
-        result: np.ndarray = talib.ATR(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.ATR(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def natr(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def natr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         NATR.
         """
-        result: np.ndarray = talib.NATR(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.NATR(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def rsi(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def rsi(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Relative Strenght Index (RSI).
         """
-        result: np.ndarray = talib.RSI(self.close, n)
+        result_array: np.ndarray = talib.RSI(self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def macd(
         self,
@@ -1046,10 +1505,7 @@ class ArrayManager(object):
         slow_period: int,
         signal_period: int,
         array: bool = False
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray, np.ndarray],
-        Tuple[float, float, float]
-    ]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[float, float, float]:
         """
         MACD.
         """
@@ -1060,59 +1516,71 @@ class ArrayManager(object):
             return macd, signal, hist
         return macd[-1], signal[-1], hist[-1]
 
-    def adx(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+    def adx(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         ADX.
         """
-        result: np.ndarray = talib.ADX(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.ADX(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def adxr(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def adxr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         ADXR.
         """
-        result: np.ndarray = talib.ADXR(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.ADXR(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def dx(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def dx(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         DX.
         """
-        result: np.ndarray = talib.DX(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.DX(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def minus_di(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def minus_di(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         MINUS_DI.
         """
-        result: np.ndarray = talib.MINUS_DI(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.MINUS_DI(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def plus_di(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def plus_di(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         PLUS_DI.
         """
-        result: np.ndarray = talib.PLUS_DI(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.PLUS_DI(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def willr(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def willr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         WILLR.
         """
-        result: np.ndarray = talib.WILLR(self.high, self.low, self.close, n)
+        result_array: np.ndarray = talib.WILLR(self.high, self.low, self.close, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def ultosc(
         self,
@@ -1120,70 +1588,77 @@ class ArrayManager(object):
         time_period2: int = 14,
         time_period3: int = 28,
         array: bool = False
-    ) -> Union[float, np.ndarray]:
+    ) -> float | np.ndarray:
         """
         Ultimate Oscillator.
         """
-        result: np.ndarray = talib.ULTOSC(self.high, self.low, self.close, time_period1, time_period2, time_period3)
+        result_array: np.ndarray = talib.ULTOSC(self.high, self.low, self.close, time_period1, time_period2, time_period3)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def trange(self, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def trange(self, array: bool = False) -> float | np.ndarray:
         """
         TRANGE.
         """
-        result: np.ndarray = talib.TRANGE(self.high, self.low, self.close)
+        result_array: np.ndarray = talib.TRANGE(self.high, self.low, self.close)
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def boll(
         self,
         n: int,
         dev: float,
         array: bool = False
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray],
-        Tuple[float, float]
-    ]:
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
         Bollinger Channel.
         """
-        mid: Union[float, np.ndarray] = self.sma(n, array)
-        std: Union[float, np.ndarray] = self.std(n, 1, array)
+        mid_array: np.ndarray = talib.SMA(self.close, n)
+        std_array: np.ndarray = talib.STDDEV(self.close, n, 1)
 
-        up: Union[float, np.ndarray] = mid + std * dev
-        down: Union[float, np.ndarray] = mid - std * dev
-
-        return up, down
+        if array:
+            up_array: np.ndarray = mid_array + std_array * dev
+            down_array: np.ndarray = mid_array - std_array * dev
+            return up_array, down_array
+        else:
+            mid: float = mid_array[-1]
+            std: float = std_array[-1]
+            up: float = mid + std * dev
+            down: float = mid - std * dev
+            return up, down
 
     def keltner(
         self,
         n: int,
         dev: float,
         array: bool = False
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray],
-        Tuple[float, float]
-    ]:
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
         Keltner Channel.
         """
-        mid: Union[float, np.ndarray] = self.sma(n, array)
-        atr: Union[float, np.ndarray] = self.atr(n, array)
+        mid_array: np.ndarray = talib.SMA(self.close, n)
+        atr_array: np.ndarray = talib.ATR(self.high, self.low, self.close, n)
 
-        up: Union[float, np.ndarray] = mid + atr * dev
-        down: Union[float, np.ndarray] = mid - atr * dev
-
-        return up, down
+        if array:
+            up_array: np.ndarray = mid_array + atr_array * dev
+            down_array: np.ndarray = mid_array - atr_array * dev
+            return up_array, down_array
+        else:
+            mid: float = mid_array[-1]
+            atr: float = atr_array[-1]
+            up: float = mid + atr * dev
+            down: float = mid - atr * dev
+            return up, down
 
     def donchian(
         self, n: int, array: bool = False
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray],
-        Tuple[float, float]
-    ]:
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
         Donchian Channel.
         """
@@ -1198,10 +1673,7 @@ class ArrayManager(object):
         self,
         n: int,
         array: bool = False
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray],
-        Tuple[float, float]
-    ]:
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
         Aroon indicator.
         """
@@ -1211,77 +1683,91 @@ class ArrayManager(object):
             return aroon_up, aroon_down
         return aroon_up[-1], aroon_down[-1]
 
-    def aroonosc(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+    def aroonosc(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Aroon Oscillator.
         """
-        result: np.ndarray = talib.AROONOSC(self.high, self.low, n)
+        result_array: np.ndarray = talib.AROONOSC(self.high, self.low, n)
 
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def minus_dm(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def minus_dm(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         MINUS_DM.
         """
-        result: np.ndarray = talib.MINUS_DM(self.high, self.low, n)
+        result_array: np.ndarray = talib.MINUS_DM(self.high, self.low, n)
 
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def plus_dm(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def plus_dm(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         PLUS_DM.
         """
-        result: np.ndarray = talib.PLUS_DM(self.high, self.low, n)
+        result_array: np.ndarray = talib.PLUS_DM(self.high, self.low, n)
 
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def mfi(self, n: int, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def mfi(self, n: int, array: bool = False) -> float | np.ndarray:
         """
         Money Flow Index.
         """
-        result: np.ndarray = talib.MFI(self.high, self.low, self.close, self.volume, n)
+        result_array: np.ndarray = talib.MFI(self.high, self.low, self.close, self.volume, n)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def ad(self, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def ad(self, array: bool = False) -> float | np.ndarray:
         """
         AD.
         """
-        result: np.ndarray = talib.AD(self.high, self.low, self.close, self.volume)
+        result_array: np.ndarray = talib.AD(self.high, self.low, self.close, self.volume)
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def adosc(
         self,
         fast_period: int,
         slow_period: int,
         array: bool = False
-    ) -> Union[float, np.ndarray]:
+    ) -> float | np.ndarray:
         """
         ADOSC.
         """
-        result: np.ndarray = talib.ADOSC(self.high, self.low, self.close, self.volume, fast_period, slow_period)
+        result_array: np.ndarray = talib.ADOSC(self.high, self.low, self.close, self.volume, fast_period, slow_period)
         if array:
-            return result
-        return result[-1]
+            return result_array
 
-    def bop(self, array: bool = False) -> Union[float, np.ndarray]:
+        result_value: float = result_array[-1]
+        return result_value
+
+    def bop(self, array: bool = False) -> float | np.ndarray:
         """
         BOP.
         """
-        result: np.ndarray = talib.BOP(self.open, self.high, self.low, self.close)
+        result_array: np.ndarray = talib.BOP(self.open, self.high, self.low, self.close)
 
         if array:
-            return result
-        return result[-1]
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
     def stoch(
         self,
@@ -1291,10 +1777,7 @@ class ArrayManager(object):
         slowd_period: int,
         slowd_matype: int,
         array: bool = False
-    ) -> Union[
-        Tuple[float, float],
-        Tuple[np.ndarray, np.ndarray]
-    ]:
+    ) -> tuple[float, float] | tuple[np.ndarray, np.ndarray]:
         """
         Stochastic Indicator
         """
@@ -1304,13 +1787,24 @@ class ArrayManager(object):
             self.close,
             fastk_period,
             slowk_period,
-            slowk_matype,
+            slowk_matype,    # type: ignore
             slowd_period,
-            slowd_matype
+            slowd_matype     # type: ignore
         )
         if array:
             return k, d
         return k[-1], d[-1]
+
+    def sar(self, acceleration: float, maximum: float, array: bool = False) -> float | np.ndarray:
+        """
+        SAR.
+        """
+        result_array: np.ndarray = talib.SAR(self.high, self.low, acceleration, maximum)
+        if array:
+            return result_array
+
+        result_value: float = result_array[-1]
+        return result_value
 
 
 def virtual(func: Callable) -> Callable:
@@ -1320,25 +1814,3 @@ def virtual(func: Callable) -> Callable:
     that can be (re)implemented by subclasses.
     """
     return func
-
-
-file_handlers: Dict[str, logging.FileHandler] = {}
-
-
-def _get_file_logger_handler(filename: str) -> logging.FileHandler:
-    handler: logging.FileHandler = file_handlers.get(filename, None)
-    if handler is None:
-        handler = logging.FileHandler(filename)
-        file_handlers[filename] = handler  # Am i need a lock?
-    return handler
-
-
-def get_file_logger(filename: str) -> logging.Logger:
-    """
-    return a logger that writes records into a file.
-    """
-    logger: logging.Logger = logging.getLogger(filename)
-    handler: logging.FileHandler = _get_file_logger_handler(filename)  # get singleton handler.
-    handler.setFormatter(log_formatter)
-    logger.addHandler(handler)  # each handler will be added only once.
-    return logger
