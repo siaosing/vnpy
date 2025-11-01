@@ -2,6 +2,7 @@
 Basic data structure used for general trading function in the trading platform.
 """
 
+import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime as Datetime
 
@@ -304,6 +305,15 @@ class QuoteData(BaseData):
             orderid=self.quoteid, symbol=self.symbol, exchange=self.exchange
         )
         return req
+
+
+@dataclass
+class IOData:
+    """
+    IO data contains filename and a single row DataFrame
+    """
+    filename: str
+    content: pd.DataFrame
 
 
 @dataclass
